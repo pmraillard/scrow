@@ -1,182 +1,340 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Écriture/Lecture NFC — Prototype</title>
-  <link rel="manifest" href="manifest.json">
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js');
-    }
-  </script>
-  <style>
-    body {
-      margin: 0;
-      font-family: sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: space-between;
-      height: 100vh;
-      background: #f5f5f5;
-      color: #222;
-    }
-    h1 {
-      font-size: 1.3em;
-      margin: 0.5em 0 0;
-      text-align: center;
-    }
-    #modeSwitch {
-      display: flex;
-      align-items: center;
-      gap: 0.5em;
-      margin: 0.5em;
-    }
-    #status {
-      width: 50px;
-      height: 50px;
-      border-radius: 50%;
-      background: gray;
-      transition: background 0.3s;
-    }
-    #valueDisplay {
-      font-size: 2.5em;
-      text-align: center;
-      margin: 0.5em 0;
-      min-height: 2em;
-      font-weight: bold;
-      word-break: break-word;
-    }
-    #keyboard {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      grid-gap: 0.6em;
-      width: 90%;
-      padding: 1em;
-      box-sizing: border-box;
-    }
-    .key {
-      aspect-ratio: 1/1;
-      font-size: 1.4em;
-      background: #fff;
-      border: 1px solid #ccc;
-      border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      transition: background 0.2s, transform 0.1s;
-      user-select: none;
-    }
-    .key:active {
-      background: #e0e0e0;
-      transform: scale(0.95);
-    }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Prototype NFC — Lecture / Écriture</title>
+<link rel="manifest" href="manifest.json">
+<script>
+  if ('serviceWorker' in navigator) navigator.serviceWorker?.register('sw.js').catch(()=>{});
+</script>
+<style>
+  :root{
+    --bg:#f5f6f8;
+    --text:#111;
+    --card:#fff;
+    --muted:#888;
+    --success:limegreen;
+    --error:crimson;
+    --status-size:100px;
+    --keyboard-width:90%;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
+  .wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:12px 0}
+  header{width:100%;display:flex;flex-direction:column;align-items:center;gap:8px}
+  h1{margin:0;font-size:1.1rem}
+  /* Big mode button */
+  #modeBtn{
+    appearance:none;
+    -webkit-appearance:none;
+    border:0;
+    background:#222;
+    color:#fff;
+    padding:14px 20px;
+    border-radius:12px;
+    font-size:1.05rem;
+    font-weight:600;
+    box-shadow:0 6px 18px rgba(0,0,0,0.12);
+    margin-top:6px;
+    min-width:180px;
+  }
+  /* status circle */
+  #status{
+    width:var(--status-size);
+    height:var(--status-size);
+    border-radius:50%;
+    background:var(--muted);
+    box-shadow:0 6px 18px rgba(0,0,0,0.08);
+    transition:background .18s, transform .08s;
+    display:flex;align-items:center;justify-content:center;
+  }
+  #status.small{width:60px;height:60px}
+  /* value display (centered big in read mode) */
+  #valueDisplay{font-size:2.2rem;font-weight:700;text-align:center;min-height:2.6rem;margin-top:6px;word-break:break-word;padding:0 10px}
+  /* keyboard */
+  #keyboard{width:var(--keyboard-width);display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:10px 0;box-sizing:border-box}
+  .key{
+    background:var(--card);border-radius:12px;border:1px solid #e0e0e0;
+    aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;
+    font-size:1.25rem;font-weight:600;user-select:none;
+    box-shadow:0 4px 10px rgba(0,0,0,0.06);
+  }
+  .key:active{transform:scale(.98);background:#f0f0f0}
+  /* last-reads row */
+  #lastReads{width:var(--keyboard-width);display:flex;gap:8px;justify-content:center;padding:12px 0;box-sizing:border-box}
+  .readCell{flex:1;background:var(--card);border-radius:8px;border:1px solid #e6e6e6;height:48px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  /* small helpers */
+  .muted{color:#666;font-size:0.9rem;margin-top:6px}
+  main{width:100%;display:flex;flex-direction:column;align-items:center;gap:6px;padding:6px 12px 18px}
+  footer{width:100%;height:28px}
+  @media (min-width:720px){
+    :root{--status-size:120px}
+    .key{font-size:1.4rem}
+  }
+</style>
 </head>
 <body>
-  <h1>Prototype NFC</h1>
+  <div class="wrap">
+    <header>
+      <h1>Prototype NFC</h1>
+      <button id="modeBtn" aria-pressed="false">Mode : Écriture</button>
+    </header>
 
-  <div id="modeSwitch">
-    <label for="modeToggle">Mode :</label>
-    <select id="modeToggle">
-      <option value="write">Écriture</option>
-      <option value="read">Lecture</option>
-    </select>
+    <main>
+      <div id="status" title="Statut"></div>
+      <div id="valueDisplay" aria-live="polite"></div>
+
+      <!-- keyboard (write mode) -->
+      <div id="keyboard" aria-hidden="false"></div>
+
+      <!-- last reads (read mode) -->
+      <div id="lastReads" style="display:none"></div>
+
+      <div class="muted">Session 60s (reset après chaque réussite)</div>
+    </main>
+
+    <footer></footer>
   </div>
 
-  <div id="status"></div>
-  <div id="valueDisplay"></div>
-  <div id="keyboard"></div>
+<script>
+/*
+  Behavior summary:
+  - Big toggle button (#modeBtn) switches modes on click and displays current mode.
+  - status circle (#status) doubled in size.
+  - keyboard (4x5) below status in write mode. Clicking a key starts a 60s writing session for that value.
+  - in read mode keyboard hidden; replaced by single horizontal row of 10 cells showing last 10 reads (most recent at left).
+  - reading session runs up to 60s and resets to 60s on each successful read.
+  - NFC APIs triggered by user interactions (clicks) to reduce permission denial risk.
+*/
 
-  <script>
-    const modeToggle = document.getElementById("modeToggle");
-    const statusEl = document.getElementById("status");
-    const keyboard = document.getElementById("keyboard");
-    const valueDisplay = document.getElementById("valueDisplay");
+const modeBtn = document.getElementById('modeBtn');
+const statusEl = document.getElementById('status');
+const keyboardEl = document.getElementById('keyboard');
+const lastReadsEl = document.getElementById('lastReads');
+const valueDisplay = document.getElementById('valueDisplay');
 
-    let mode = "write";
-    let writing = false;
-    let reading = false;
-    let stopTime = 0;
-    let lastValue = null;
+let mode = 'write'; // 'write' or 'read'
+let writeActive = false;
+let readActive = false;
+let writeTimeout = 0;
+let readTimeout = 0;
+let currentWriteValue = null;
+let lastReads = []; // keep last 10 reads since page opened
 
-    modeToggle.addEventListener("change", () => {
-      mode = modeToggle.value;
-      valueDisplay.textContent = "";
-      statusEl.style.background = "gray";
-      if (mode === "read") startReading();
-      else stopReading();
-    });
+// create keyboard 1..20 (4 rows x 5 cols via grid)
+for (let i = 1; i <= 20; i++){
+  const k = document.createElement('div');
+  k.className = 'key';
+  k.textContent = i;
+  k.dataset.value = String(i);
+  k.addEventListener('click', onKeyClick);
+  keyboardEl.appendChild(k);
+}
 
-    // --- Génération du clavier (1 → 20) ---
-    for (let i = 1; i <= 20; i++) {
-      const key = document.createElement("div");
-      key.className = "key";
-      key.textContent = i;
-      key.addEventListener("click", () => {
-        if (mode === "write") startWrite(i);
-      });
-      keyboard.appendChild(key);
-    }
+// update mode button display
+function updateModeUI(){
+  modeBtn.textContent = 'Mode : ' + (mode === 'write' ? 'Écriture' : 'Lecture');
+  modeBtn.setAttribute('aria-pressed', mode === 'read' ? 'true' : 'false');
 
-    // --- Mode Écriture ---
-    async function startWrite(value) {
-      if (writing && value === lastValue) return;
-      writing = true;
-      lastValue = value;
-      stopTime = Date.now() + 60000;
-      statusEl.style.background = "gray";
+  if (mode === 'write'){
+    keyboardEl.style.display = '';
+    lastReadsEl.style.display = 'none';
+    valueDisplay.textContent = '';
+    // ensure write state shows neutral if not active
+    if (!writeActive) setStatusNeutral();
+  } else {
+    keyboardEl.style.display = 'none';
+    lastReadsEl.style.display = '';
+    // show lastReads now
+    renderLastReads();
+    if (!readActive) setStatusNeutral();
+  }
+}
+
+// status helpers
+function setStatusNeutral(){ statusEl.style.background = getComputedStyle(document.documentElement).getPropertyValue('--muted') || '#888'; }
+function setStatusSuccess(){ statusEl.style.background = getComputedStyle(document.documentElement).getPropertyValue('--success') || 'limegreen'; }
+function setStatusError(){ statusEl.style.background = getComputedStyle(document.documentElement).getPropertyValue('--error') || 'crimson'; }
+
+// key click handler
+function onKeyClick(e){
+  const v = e.currentTarget.dataset.value;
+  // start writing session (user gesture)
+  startWriteSession(v);
+}
+
+// MODE TOGGLE (single big button)
+modeBtn.addEventListener('click', () => {
+  // toggle
+  mode = (mode === 'write') ? 'read' : 'write';
+  updateModeUI();
+  // start reading automatically when switching to read (user gesture satisfied)
+  if (mode === 'read') startReadSession();
+  else stopReadSession(); // stop reading when switching to write
+});
+
+// ---------- WRITE SESSION ----------
+async function startWriteSession(value){
+  // ensure mode is write (user might have switched)
+  if (mode !== 'write') {
+    mode = 'write';
+    updateModeUI();
+  }
+
+  // if already writing same value, just reset timer
+  if (writeActive && currentWriteValue === value){
+    writeTimeout = Date.now() + 60000;
+    return;
+  }
+
+  currentWriteValue = value;
+  writeActive = true;
+  writeTimeout = Date.now() + 60000;
+  setStatusNeutral();
+  valueDisplay.textContent = '';
+  // create a local NDEFReader instance for write attempts - user gesture initiated
+  try {
+    const writer = new NDEFReader();
+    // loop until timeout or mode changes
+    while(writeActive && mode === 'write' && Date.now() < writeTimeout){
       try {
-        const ndef = new NDEFReader();
-        while (Date.now() < stopTime && mode === "write") {
-          try {
-            await ndef.write(`Valeur: ${value}`);
-            statusEl.style.background = "limegreen";
-          } catch {
-            statusEl.style.background = "crimson";
-          }
-          await new Promise(r => setTimeout(r, 800));
-        }
-      } catch (err) {
-        alert("Erreur NFC : " + err.message);
-      } finally {
-        writing = false;
-        statusEl.style.background = "gray";
+        // write payload as plain text containing the number
+        await writer.write(String(currentWriteValue));
+        setStatusSuccess();
+        // reset timer on success
+        writeTimeout = Date.now() + 60000;
+      } catch (werr){
+        // write failed (e.g. tag not writable) - show error briefly
+        setStatusError();
       }
+      // small delay to avoid hammering; user will remove tag between attempts
+      await new Promise(r => setTimeout(r, 600));
+      // revert to neutral if still active (small visual bounce)
+      if (Date.now() < writeTimeout && writeActive && mode === 'write') setStatusNeutral();
     }
+  } catch(initErr){
+    alert('Impossible d\'initialiser l\'écriture NFC : ' + (initErr && initErr.message ? initErr.message : initErr));
+  } finally {
+    writeActive = false;
+    currentWriteValue = null;
+    setStatusNeutral();
+  }
+}
 
-    // --- Mode Lecture ---
-    async function startReading() {
-      if (reading) return;
-      reading = true;
-      stopTime = Date.now() + 60000;
-      statusEl.style.background = "gray";
+// ---------- READ SESSION ----------
+let readerInstance = null;
+
+async function startReadSession(){
+  // guard - if already reading, refresh timer
+  if (readActive){
+    readTimeout = Date.now() + 60000;
+    return;
+  }
+  // enter read mode
+  readActive = true;
+  readTimeout = Date.now() + 60000;
+  setStatusNeutral();
+  valueDisplay.textContent = '';
+  renderLastReads();
+
+  // instantiate scanner (user gesture satisfied by click that switched mode)
+  try {
+    readerInstance = new NDEFReader();
+    await readerInstance.scan(); // may prompt permission
+    readerInstance.onreading = event => {
+      // decode textual records and capture them
       try {
-        const ndef = new NDEFReader();
-        await ndef.scan();
-        ndef.onreading = event => {
-          const decoder = new TextDecoder();
-          for (const record of event.message.records) {
-            const text = decoder.decode(record.data);
-            valueDisplay.textContent = text;
-            stopTime = Date.now() + 60000;
-            statusEl.style.background = "limegreen";
+        for (const rec of event.message.records){
+          // attempt to decode as text, fall back to byte decode
+          let value = '';
+          if (rec.recordType === 'text' && 'data' in rec){
+            // record.data is a DataView or ArrayBuffer depending on impl
+            try {
+              const text = (typeof rec.data === 'string') ? rec.data : new TextDecoder().decode(rec.data);
+              value = text;
+            } catch(e){
+              value = '[décodage impossible]';
+            }
+          } else {
+            // fallback: try decode raw data
+            try { value = new TextDecoder().decode(rec.data); } catch(e){ value = rec.toString(); }
           }
-        };
-        while (Date.now() < stopTime && mode === "read") {
-          await new Promise(r => setTimeout(r, 500));
+          // store in history (most recent first)
+          if (value === '') value = '[vide]';
+          lastReads.unshift(value);
+          if (lastReads.length > 10) lastReads.length = 10;
+          // update UI
+          renderLastReads();
+          valueDisplay.textContent = value;
+          // success indicator and reset timeout
+          setStatusSuccess();
+          readTimeout = Date.now() + 60000;
+          // brief visual then neutral (keeps user informed)
+          setTimeout(()=>{ if (readActive && Date.now() < readTimeout) setStatusNeutral(); }, 500);
         }
-      } catch (err) {
-        alert("Erreur NFC : " + err.message);
-      } finally {
-        reading = false;
-        statusEl.style.background = "gray";
+      } catch(e){
+        console.error('lecture tag erreur', e);
+        setStatusError();
       }
+    };
+    readerInstance.onreadingerror = err => {
+      console.warn('NFC reading error', err);
+      setStatusError();
+    };
+
+    // keep loop alive until timeout or mode changes
+    while(readActive && mode === 'read' && Date.now() < readTimeout){
+      await new Promise(r => setTimeout(r, 400));
     }
 
-    function stopReading() { reading = false; }
-  </script>
+  } catch(err){
+    // permission denied or other init error
+    alert('Impossible d\'accéder au NFC : ' + (err && err.message ? err.message : err));
+    setStatusError();
+  } finally {
+    // stop reading (no standardized stop API - we simply ignore future events)
+    readActive = false;
+    try{ if (readerInstance) readerInstance.onreading = null; } catch(e){}
+    readerInstance = null;
+    setStatusNeutral();
+  }
+}
+
+function stopReadSession(){
+  readActive = false;
+  readTimeout = 0;
+  try{ if (readerInstance) readerInstance.onreading = null; } catch(e){}
+  readerInstance = null;
+  setStatusNeutral();
+}
+
+// render lastReads as 10 centered boxes (most recent left)
+function renderLastReads(){
+  // ensure 10 cells
+  lastReadsEl.innerHTML = '';
+  for (let i = 0; i < 10; i++){
+    const cell = document.createElement('div');
+    cell.className = 'readCell';
+    const v = lastReads[i] ?? '';
+    cell.textContent = v;
+    cell.style.whiteSpace = 'nowrap';
+    cell.style.overflow = 'hidden';
+    cell.style.textOverflow = 'ellipsis';
+    lastReadsEl.appendChild(cell);
+  }
+}
+
+// init UI
+setStatusNeutral();
+updateModeUI();
+
+// keep UI responsive if page regained focus
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible'){
+    // if we were in read mode and not actively reading, restart (requires user gesture to start scan initially).
+    // We do not automatically re-request permissions here.
+  }
+});
+</script>
 </body>
 </html>
