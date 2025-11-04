@@ -1,0 +1,9 @@
+{
+  "name": "NFC Writer Prototype",
+  "short_name": "NFCWriter",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": []
+}

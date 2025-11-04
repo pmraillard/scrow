@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>NFC Writer Prototype</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  :root{--bg:#ffffff;--muted:#888;--neutral:#888;--success:green;--error:red;}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:36px auto;max-width:340px;text-align:center;color:#111}
+  h1{font-size:1.1rem;margin-bottom:14px}
+  .buttons{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+  button.valueBtn{font-size:1.1rem;padding:10px 14px;border-radius:10px;border:0;background:#e6e6e6}
+  button.valueBtn.active{background:#cfcfcf}
+  #picker{width:100%;margin-top:12px}
+  #currentValue{font-size:1.4rem;margin-top:10px}
+  #status{width:80px;height:80px;margin:26px auto;border-radius:50%;background:var(--neutral);transition:background-color .2s}
+  #info{font-size:0.9rem;color:#444;margin-top:8px}
+  .small{font-size:0.85rem;color:#666;margin-top:6px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+  <h1>Écriture NFC — Prototype</h1>
+
+  <div class="buttons" id="quickButtons">
+    <button class="valueBtn" data-value="5">5</button>
+    <button class="valueBtn" data-value="10">10</button>
+    <button class="valueBtn" data-value="15">15</button>
+    <button class="valueBtn" data-value="20">20</button>
+  </div>
+
+  <input type="range" id="picker" min="1" max="20" value="10" />
+  <div id="currentValue">10</div>
+
+  <div id="status" title="Statut"></div>
+  <div id="info">Appuie un bouton ou déplace la molette pour démarrer le mode écriture (60s).<br>Approche une puce NFC quand le rond est gris.</div>
+  <div class="small" id="debug" aria-hidden="true"></div>
+
+<script>
+/*
+  Corrected Web NFC prototype.
+  - Uses a single NDEFReader instance (scanning).
+  - Starts scanning on user gesture (click / input).
+  - Keeps the writing session active 60s; resets timeout after each success.
+  - Avoids creating multiple concurrent scans.
+  - Visual feedback only via the circular indicator (neutral/green/red).
+  Notes:
+  - Web NFC works on Android Chrome (and some Chromium-based browsers).
+  - Writing may prompt the browser for permission on first use.
+*/
+
+const statusEl = document.getElementById('status');
+const picker = document.getElementById('picker');
+const currentValueEl = document.getElementById('currentValue');
+const buttons = document.querySelectorAll('.valueBtn');
+const debugEl = document.getElementById('debug');
+
+let writingActive = false;
+let valueToWrite = null;
+let timeoutId = null;
+
+let ndef = null;
+let scanning = false;
+
+function logDebug(...args){
+  console.log(...args);
+  debugEl.textContent = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+}
+
+/* UI */
+function setIndicator(color){
+  statusEl.style.backgroundColor = color;
+}
+function showNeutral(){ setIndicator(getComputedStyle(document.documentElement).getPropertyValue('--neutral') || '#888'); }
+function showSuccess(){ setIndicator(getComputedStyle(document.documentElement).getPropertyValue('--success') || 'green'); }
+function showError(){ setIndicator(getComputedStyle(document.documentElement).getPropertyValue('--error') || 'red'); }
+
+/* Timeout management */
+function restartTimeout(){
+  if (timeoutId) clearTimeout(timeoutId);
+  timeoutId = setTimeout(() => {
+    writingActive = false;
+    showNeutral();
+    logDebug('Session timeout — stopped writing.');
+  }, 60000);
+}
+
+/* Start or refresh writing session for a given value */
+async function startWriting(val){
+  // normalize
+  const sval = String(val);
+  // if already active for same value -> just restart timeout
+  if (writingActive && valueToWrite === sval){
+    restartTimeout();
+    logDebug('Refreshed timeout for same value', sval);
+    return;
+  }
+
+  valueToWrite = sval;
+  writingActive = true;
+  showNeutral();
+  restartTimeout();
+  currentValueEl.textContent = sval;
+  // update active button visual
+  buttons.forEach(b => b.classList.toggle('active', b.dataset.value === sval));
+
+  // if not scanning yet, start NFC scanning (user gesture required)
+  if (!('NDEFReader' in window)){
+    alert('Web NFC non supporté sur ce navigateur / appareil.');
+    showError();
+    return;
+  }
+
+  if (!scanning){
+    try{
+      ndef = new NDEFReader();
+      await ndef.scan();
+      scanning = true;
+      logDebug('NFC scanning started');
+      ndef.onreading = async (event) => {
+        if (!writingActive) return;
+        // event.serialNumber is available on some implementations
+        logDebug('Tag detected', event);
+        try {
+          // attempt to write the current value
+          await ndef.write(valueToWrite);
+          showSuccess();
+          logDebug('Write success', valueToWrite);
+          restartTimeout();
+          // short visual bounce back to neutral
+          setTimeout(()=>{ if (writingActive) showNeutral(); }, 500);
+        } catch(writeErr){
+          logDebug('Write error', writeErr);
+          showError();
+          // keep showing error briefly then return to neutral if still active
+          setTimeout(()=>{ if (writingActive) showNeutral(); }, 1000);
+        }
+      };
+
+      ndef.onreadingerror = (err) => {
+        logDebug('Reading error', err);
+      };
+
+    } catch (err) {
+      logDebug('Failed to start scan', err);
+      alert('Impossible d’accéder au matériel NFC : ' + String(err));
+      showError();
+      writingActive = false;
+      return;
+    }
+  } else {
+    // already scanning; no further action needed
+    logDebug('Already scanning - writing session started for', sval);
+  }
+}
+
+/* Wire UI */
+buttons.forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    startWriting(btn.dataset.value);
+    picker.value = btn.dataset.value;
+    currentValueEl.textContent = btn.dataset.value;
+  });
+});
+
+picker.addEventListener('input', (e) => {
+  const v = e.target.value;
+  startWriting(v);
+  // clear active buttons when using the picker
+  buttons.forEach(b => b.classList.remove('active'));
+});
+
+/* Cleanup on page hide/unload */
+window.addEventListener('pagehide', () => {
+  if (timeoutId) clearTimeout(timeoutId);
+  // There is currently no standardized stop() for NDEFReader.scan; leaving it.
+  // Browsers typically stop scanning when page is hidden or closed.
+  logDebug('Page hidden - cleared timeout');
+});
+
+/* Initialize UI */
+showNeutral();
+currentValueEl.textContent = picker.value;
+
+</script>
+</body>
+</html>
