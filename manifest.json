@@ -1,11 +1,11 @@
 {
-  "name": "Prototype NFC",
-  "short_name": "NFCProto",
-  "start_url": ".",
+  "name": "Prototype NFC Lecture/Écriture",
+  "short_name": "NFC Proto",
+  "description": "Application Web NFC simplifiée pour lecture et écriture de tags.",
+  "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#f5f5f5",
-  "theme_color": "#222",
-  "description": "Prototype minimal NFC lecture/écriture",
+  "background_color": "#f5f6f8",
+  "theme_color": "#111111",
   "icons": [
     {
       "src": "icon-192.png",
