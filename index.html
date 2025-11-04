@@ -1,188 +1,182 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1.0" />
-<title>NFC Writer Prototype</title>
-<link rel="manifest" href="manifest.json">
-<style>
-  :root{--bg:#ffffff;--muted:#888;--neutral:#888;--success:green;--error:red;}
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:36px auto;max-width:340px;text-align:center;color:#111}
-  h1{font-size:1.1rem;margin-bottom:14px}
-  .buttons{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
-  button.valueBtn{font-size:1.1rem;padding:10px 14px;border-radius:10px;border:0;background:#e6e6e6}
-  button.valueBtn.active{background:#cfcfcf}
-  #picker{width:100%;margin-top:12px}
-  #currentValue{font-size:1.4rem;margin-top:10px}
-  #status{width:80px;height:80px;margin:26px auto;border-radius:50%;background:var(--neutral);transition:background-color .2s}
-  #info{font-size:0.9rem;color:#444;margin-top:8px}
-  .small{font-size:0.85rem;color:#666;margin-top:6px}
-  .hidden{display:none}
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Écriture/Lecture NFC — Prototype</title>
+  <link rel="manifest" href="manifest.json">
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      height: 100vh;
+      background: #f5f5f5;
+      color: #222;
+    }
+    h1 {
+      font-size: 1.3em;
+      margin: 0.5em 0 0;
+      text-align: center;
+    }
+    #modeSwitch {
+      display: flex;
+      align-items: center;
+      gap: 0.5em;
+      margin: 0.5em;
+    }
+    #status {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      background: gray;
+      transition: background 0.3s;
+    }
+    #valueDisplay {
+      font-size: 2.5em;
+      text-align: center;
+      margin: 0.5em 0;
+      min-height: 2em;
+      font-weight: bold;
+      word-break: break-word;
+    }
+    #keyboard {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      grid-gap: 0.6em;
+      width: 90%;
+      padding: 1em;
+      box-sizing: border-box;
+    }
+    .key {
+      aspect-ratio: 1/1;
+      font-size: 1.4em;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      transition: background 0.2s, transform 0.1s;
+      user-select: none;
+    }
+    .key:active {
+      background: #e0e0e0;
+      transform: scale(0.95);
+    }
+  </style>
 </head>
 <body>
-  <h1>Écriture NFC — Prototype</h1>
+  <h1>Prototype NFC</h1>
 
-  <div class="buttons" id="quickButtons">
-    <button class="valueBtn" data-value="5">5</button>
-    <button class="valueBtn" data-value="10">10</button>
-    <button class="valueBtn" data-value="15">15</button>
-    <button class="valueBtn" data-value="20">20</button>
+  <div id="modeSwitch">
+    <label for="modeToggle">Mode :</label>
+    <select id="modeToggle">
+      <option value="write">Écriture</option>
+      <option value="read">Lecture</option>
+    </select>
   </div>
 
-  <input type="range" id="picker" min="1" max="20" value="10" />
-  <div id="currentValue">10</div>
+  <div id="status"></div>
+  <div id="valueDisplay"></div>
+  <div id="keyboard"></div>
 
-  <div id="status" title="Statut"></div>
-  <div id="info">Appuie un bouton ou déplace la molette pour démarrer le mode écriture (60s).<br>Approche une puce NFC quand le rond est gris.</div>
-  <div class="small" id="debug" aria-hidden="true"></div>
+  <script>
+    const modeToggle = document.getElementById("modeToggle");
+    const statusEl = document.getElementById("status");
+    const keyboard = document.getElementById("keyboard");
+    const valueDisplay = document.getElementById("valueDisplay");
 
-<script>
-/*
-  Corrected Web NFC prototype.
-  - Uses a single NDEFReader instance (scanning).
-  - Starts scanning on user gesture (click / input).
-  - Keeps the writing session active 60s; resets timeout after each success.
-  - Avoids creating multiple concurrent scans.
-  - Visual feedback only via the circular indicator (neutral/green/red).
-  Notes:
-  - Web NFC works on Android Chrome (and some Chromium-based browsers).
-  - Writing may prompt the browser for permission on first use.
-*/
+    let mode = "write";
+    let writing = false;
+    let reading = false;
+    let stopTime = 0;
+    let lastValue = null;
 
-const statusEl = document.getElementById('status');
-const picker = document.getElementById('picker');
-const currentValueEl = document.getElementById('currentValue');
-const buttons = document.querySelectorAll('.valueBtn');
-const debugEl = document.getElementById('debug');
+    modeToggle.addEventListener("change", () => {
+      mode = modeToggle.value;
+      valueDisplay.textContent = "";
+      statusEl.style.background = "gray";
+      if (mode === "read") startReading();
+      else stopReading();
+    });
 
-let writingActive = false;
-let valueToWrite = null;
-let timeoutId = null;
-
-let ndef = null;
-let scanning = false;
-
-function logDebug(...args){
-  console.log(...args);
-  debugEl.textContent = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-}
-
-/* UI */
-function setIndicator(color){
-  statusEl.style.backgroundColor = color;
-}
-function showNeutral(){ setIndicator(getComputedStyle(document.documentElement).getPropertyValue('--neutral') || '#888'); }
-function showSuccess(){ setIndicator(getComputedStyle(document.documentElement).getPropertyValue('--success') || 'green'); }
-function showError(){ setIndicator(getComputedStyle(document.documentElement).getPropertyValue('--error') || 'red'); }
-
-/* Timeout management */
-function restartTimeout(){
-  if (timeoutId) clearTimeout(timeoutId);
-  timeoutId = setTimeout(() => {
-    writingActive = false;
-    showNeutral();
-    logDebug('Session timeout — stopped writing.');
-  }, 60000);
-}
-
-/* Start or refresh writing session for a given value */
-async function startWriting(val){
-  // normalize
-  const sval = String(val);
-  // if already active for same value -> just restart timeout
-  if (writingActive && valueToWrite === sval){
-    restartTimeout();
-    logDebug('Refreshed timeout for same value', sval);
-    return;
-  }
-
-  valueToWrite = sval;
-  writingActive = true;
-  showNeutral();
-  restartTimeout();
-  currentValueEl.textContent = sval;
-  // update active button visual
-  buttons.forEach(b => b.classList.toggle('active', b.dataset.value === sval));
-
-  // if not scanning yet, start NFC scanning (user gesture required)
-  if (!('NDEFReader' in window)){
-    alert('Web NFC non supporté sur ce navigateur / appareil.');
-    showError();
-    return;
-  }
-
-  if (!scanning){
-    try{
-      ndef = new NDEFReader();
-      await ndef.scan();
-      scanning = true;
-      logDebug('NFC scanning started');
-      ndef.onreading = async (event) => {
-        if (!writingActive) return;
-        // event.serialNumber is available on some implementations
-        logDebug('Tag detected', event);
-        try {
-          // attempt to write the current value
-          await ndef.write(valueToWrite);
-          showSuccess();
-          logDebug('Write success', valueToWrite);
-          restartTimeout();
-          // short visual bounce back to neutral
-          setTimeout(()=>{ if (writingActive) showNeutral(); }, 500);
-        } catch(writeErr){
-          logDebug('Write error', writeErr);
-          showError();
-          // keep showing error briefly then return to neutral if still active
-          setTimeout(()=>{ if (writingActive) showNeutral(); }, 1000);
-        }
-      };
-
-      ndef.onreadingerror = (err) => {
-        logDebug('Reading error', err);
-      };
-
-    } catch (err) {
-      logDebug('Failed to start scan', err);
-      alert('Impossible d’accéder au matériel NFC : ' + String(err));
-      showError();
-      writingActive = false;
-      return;
+    // --- Génération du clavier (1 → 20) ---
+    for (let i = 1; i <= 20; i++) {
+      const key = document.createElement("div");
+      key.className = "key";
+      key.textContent = i;
+      key.addEventListener("click", () => {
+        if (mode === "write") startWrite(i);
+      });
+      keyboard.appendChild(key);
     }
-  } else {
-    // already scanning; no further action needed
-    logDebug('Already scanning - writing session started for', sval);
-  }
-}
 
-/* Wire UI */
-buttons.forEach(btn => {
-  btn.addEventListener('click', (e) => {
-    startWriting(btn.dataset.value);
-    picker.value = btn.dataset.value;
-    currentValueEl.textContent = btn.dataset.value;
-  });
-});
+    // --- Mode Écriture ---
+    async function startWrite(value) {
+      if (writing && value === lastValue) return;
+      writing = true;
+      lastValue = value;
+      stopTime = Date.now() + 60000;
+      statusEl.style.background = "gray";
+      try {
+        const ndef = new NDEFReader();
+        while (Date.now() < stopTime && mode === "write") {
+          try {
+            await ndef.write(`Valeur: ${value}`);
+            statusEl.style.background = "limegreen";
+          } catch {
+            statusEl.style.background = "crimson";
+          }
+          await new Promise(r => setTimeout(r, 800));
+        }
+      } catch (err) {
+        alert("Erreur NFC : " + err.message);
+      } finally {
+        writing = false;
+        statusEl.style.background = "gray";
+      }
+    }
 
-picker.addEventListener('input', (e) => {
-  const v = e.target.value;
-  startWriting(v);
-  // clear active buttons when using the picker
-  buttons.forEach(b => b.classList.remove('active'));
-});
+    // --- Mode Lecture ---
+    async function startReading() {
+      if (reading) return;
+      reading = true;
+      stopTime = Date.now() + 60000;
+      statusEl.style.background = "gray";
+      try {
+        const ndef = new NDEFReader();
+        await ndef.scan();
+        ndef.onreading = event => {
+          const decoder = new TextDecoder();
+          for (const record of event.message.records) {
+            const text = decoder.decode(record.data);
+            valueDisplay.textContent = text;
+            stopTime = Date.now() + 60000;
+            statusEl.style.background = "limegreen";
+          }
+        };
+        while (Date.now() < stopTime && mode === "read") {
+          await new Promise(r => setTimeout(r, 500));
+        }
+      } catch (err) {
+        alert("Erreur NFC : " + err.message);
+      } finally {
+        reading = false;
+        statusEl.style.background = "gray";
+      }
+    }
 
-/* Cleanup on page hide/unload */
-window.addEventListener('pagehide', () => {
-  if (timeoutId) clearTimeout(timeoutId);
-  // There is currently no standardized stop() for NDEFReader.scan; leaving it.
-  // Browsers typically stop scanning when page is hidden or closed.
-  logDebug('Page hidden - cleared timeout');
-});
-
-/* Initialize UI */
-showNeutral();
-currentValueEl.textContent = picker.value;
-
-</script>
+    function stopReading() { reading = false; }
+  </script>
 </body>
 </html>
